@@ -4,6 +4,7 @@
     "fs-extra": "^11.3.0",
     "googleapis": "^148.0.0",
     "lodash": "^4.17.21",
+    "mongodb": "^6.15.0",
     "open": "8.4"
   }
 }

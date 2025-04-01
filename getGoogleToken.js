@@ -1,14 +1,21 @@
+const config = require('./config');
+let localConfig = {};
+try {
+	localConfig = require('./local-config');
+} catch (error) { /**/ }
+const _ = require('lodash');
+const cfg = _.merge(config, localConfig);
+const { MongoClient } = require('mongodb');
+const MONGO_URI = `mongodb://${cfg.mongodb.host}:${cfg.mongodb.port}/${cfg.mongodb.db}`;
+console.log(MONGO_URI);
+const client = new MongoClient(MONGO_URI);
 const os = require('os');
-const _ = require("lodash");
 const _client_secret = require("./client_secret");
 if (_.isEmpty(_client_secret)) {
     console.log("No credentials");
     process.exit(0);
 }
 
-// property name inside of _client_secret dependence from app type in your Google development console.
-// for example, type "Web Application" _client_secret.web
-// In future need to collect all properties
 const { client_id, client_secret } = _client_secret.installed ? _client_secret.installed : _client_secret.web;
 const fs = require("fs-extra");
 const { google } = require("googleapis");
@@ -20,7 +27,7 @@ const app = express();
 const port = 4000;
 const local_ip = "localhost";
 const oauth2Client = new google.auth.OAuth2(client_id, client_secret, `http://${local_ip}:${port}/auth`);
-let server;
+let server, users;
 
 app.get("/auth", async (req, res) => {
     const { code } = req.query;
@@ -33,6 +40,14 @@ app.get("/auth", async (req, res) => {
     try {
         const userInfo = await oauth2.userinfo.v2.me.get();
         console.log("Получен токен для пользователя:", userInfo.data);
+        await initMongoDB();
+        const user = await users.findOne({ email:"userInfo.data.email" });
+        userInfo.data.tokens = tokens;
+        if (user) {
+            await users.updateOne({ _id:user._id }, { $set:userInfo.data });
+        } else {
+            await users.insertOne(userInfo.data);
+        }
     } catch (error) {
         console.error("Ошибка при получении информации о пользователе:", error);
     }
@@ -53,3 +68,9 @@ server = app.listen(port, () => {
         }
     })();
 });
+
+async function initMongoDB() {
+    await client.connect();
+    const db = client.db(cfg.mongodb.db);
+    users = db.collection("users");
+}
