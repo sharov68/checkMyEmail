@@ -1,7 +1,9 @@
+/*global process */
 const config = require('./config');
 let localConfig = {};
 try {
 	localConfig = require('./local-config');
+// eslint-disable-next-line no-unused-vars
 } catch (error) { /**/ }
 const _ = require('lodash');
 const cfg = _.merge(config, localConfig);
@@ -9,7 +11,6 @@ const { MongoClient } = require('mongodb');
 const MONGO_URI = `mongodb://${cfg.mongodb.host}:${cfg.mongodb.port}/${cfg.mongodb.db}`;
 console.log(MONGO_URI);
 const client = new MongoClient(MONGO_URI);
-const os = require('os');
 const _client_secret = require("./client_secret");
 if (_.isEmpty(_client_secret)) {
     console.log("No credentials");
@@ -17,10 +18,8 @@ if (_.isEmpty(_client_secret)) {
 }
 
 const { client_id, client_secret } = _client_secret.installed ? _client_secret.installed : _client_secret.web;
-const fs = require("fs-extra");
 const { google } = require("googleapis");
 const open = require("open");
-const TOKEN_PATH = "./token.json"
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'];
 const express = require("express");
 const app = express();
@@ -32,7 +31,6 @@ let server, users;
 app.get("/auth", async (req, res) => {
     const { code } = req.query;
     const { tokens } = await oauth2Client.getToken(code);
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
     oauth2Client.setCredentials(tokens);
     res.send("Authentication successful! You can close this window.");
     console.log("Токен сохранён. Можно запускать скрипты.");
