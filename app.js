@@ -53,7 +53,7 @@ setInterval(async () => {
 	if (!_b_gmailCheckStart) {
 		await checkNewMessages();
 	}
-}, 5*60*1000);
+}, cfg.app.interval*60*1000);
 
 async function checkNewMessages() {
 	_b_gmailCheckStart = 1;
