@@ -20,7 +20,7 @@ if (_.isEmpty(_client_secret)) {
 const { client_id, client_secret } = _client_secret.installed ? _client_secret.installed : _client_secret.web;
 const { google } = require("googleapis");
 const open = require("open");
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'];
+const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'];
 const express = require("express");
 const app = express();
 const port = 4000;
@@ -39,7 +39,7 @@ app.get("/auth", async (req, res) => {
         const userInfo = await oauth2.userinfo.v2.me.get();
         console.log("Получен токен для пользователя:", userInfo.data);
         await initMongoDB();
-        const user = await users.findOne({ email:"userInfo.data.email" });
+        const user = await users.findOne({ email:userInfo.data.email });
         userInfo.data.tokens = tokens;
         if (user) {
             await users.updateOne({ _id:user._id }, { $set:userInfo.data });
