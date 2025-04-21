@@ -91,14 +91,18 @@ async function initMongoDB() {
 
 async function initTelegram() {
 	if (config.telegram.apiKey) {
-		const initAnswer = `Enter your email.`;
 		bot = new TelegramBot(config.telegram.apiKey, { polling:true });
 		bot.onText(/\/start/, async msg => {
 			const chatId = msg.chat.id;
 			console.log("\n");
 			console.log(improveDate(new Date()), "Received /start.", "chat id:", chatId);
 			console.log("\n");
-			await bot.sendMessage(chatId, initAnswer);
+			const user = await collections.users.findOne({ telegramId:chatId });
+			if (user) {
+				await bot.sendMessage(chatId, "Почта уже привязана");
+			} else {
+				await bot.sendMessage(chatId, "Enter your email.");
+			}
 		});
 		bot.onText(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, async msg => {
 			const chatId = msg.chat.id;
