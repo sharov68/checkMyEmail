@@ -55,15 +55,15 @@ async function checkNewMessages() {
 			if (force_token_refresh) {
 				await refreshGoogleToken({ user });
 			}
-			const lastGmailMessage = await getLastGmailMessage();
+			const lastGmailMessage = await getLastGmailMessage({ user });
 			if (lastGmailMessage) {
 				const newMessageIds = await getMessagesAfter({ lastMessage:lastGmailMessage });
 				for (let j = 0; j < newMessageIds.length; j++) {
 					const messageId = newMessageIds[j];
-					await getMessage({ messageId });
+					await getMessage({ messageId, user });
 				}
 			} else {
-				await getMessages();
+				await getMessages({ user });
 			}
 		} else {
 			console.log(`У пользователя ${user._id} нет токенов!`);
@@ -97,7 +97,7 @@ async function ensureGoogleToken({ user }) {
 	gmail = google.gmail({ version:'v1', auth:oauth2Client });
 }
 
-async function getMessages() {
+async function getMessages({ user }) {
 	const userId = 'me';
 	let allMessages = [];
 	let pageToken = null;
@@ -111,11 +111,11 @@ async function getMessages() {
 	allMessages = allMessages.reverse();
 	for (let i = 0; i < allMessages.length; i++) {
 		const message = allMessages[i];
-		await getMessage({ messageId:message.id });
+		await getMessage({ messageId:message.id, user });
 	}
 }
 
-async function getMessage({ messageId }) {
+async function getMessage({ messageId, user }) {
 	const { data } = await gmail.users.messages.get({ userId:'me', id:messageId });
 	let messageText;
 	if (data.payload.body && data.payload.body.data) {
@@ -124,7 +124,7 @@ async function getMessage({ messageId }) {
 		messageText = findPlainTextPart(data.payload.parts);
 	}
 	const { id, threadId, snippet, historyId } = data;
-	const gmailData = { id, threadId, snippet, historyId, messageText };
+	const gmailData = { id, threadId, snippet, historyId, messageText, _iduser:user._id };
 	await collections.gmail.insertOne(gmailData);
 	console.log("\n");
 	console.log(id, data.snippet);
@@ -151,8 +151,8 @@ function findPlainTextPart(parts) {
 	return null;
 }
 
-async function getLastGmailMessage() {
-	const lastMessage = await collections.gmail.findOne({}, { sort:{ _id:-1 } });
+async function getLastGmailMessage({ user }) {
+	const lastMessage = await collections.gmail.findOne({ _iduser:user._id }, { sort:{ _id:-1 } });
 	return lastMessage;
 }
 
