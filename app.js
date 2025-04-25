@@ -1,14 +1,9 @@
-/**
- * ВНИМАНИЕ!
- * На данный момент это приложение может работать с одним пользователем.
- * Для нескольких пользователей нужно адаптировать.
- * Например, переменные bot, gamil должны быть индивидуально для каждого пользователя.
- */
+/*global process */
 
 /**
  Принудительное обновление Гугл-токена при запуске сервиса:
  node app --force_token_refresh=true
- */
+*/
 
 const { Buffer } = require('buffer');
 const argv = require('yargs').argv;
@@ -39,13 +34,12 @@ const { google } = require("googleapis");
 const MailComposer = require('nodemailer/lib/mail-composer');
 const _client_secret = require("./client_secret");
 const { client_id, client_secret } = _client_secret.installed ? _client_secret.installed : _client_secret.web;
-const oauth2Client = new google.auth.OAuth2(client_id, client_secret, "http://localhost");
-let gmail, bot;
+const usersConnections = {}; // здесь oauth2Client, bot, gmail персональные для каждого пользователя
 let _b_gmailCheckStart;
 
 (async()=>{
 	await initMongoDB();
-	await initTelegram();
+	await initConnections();
 	await checkNewMessages();
 })();
 
@@ -61,10 +55,10 @@ async function checkNewMessages() {
 	for (let i = 0; i < users.length; i++) {
 		const user = users[i];
 		if (user.tokens) {
-			await ensureGoogleToken({ user });
-			if (force_token_refresh) {
-				await refreshGoogleToken({ user });
+			if (!usersConnections[user._id]) {
+				usersConnections[user._id] = {};
 			}
+			await ensureGoogleToken({ user });
 			const lastGmailMessage = await getLastGmailMessage({ user });
 			if (lastGmailMessage) {
 				const newMessageIds = await getMessagesAfter({ lastMessage:lastGmailMessage });
@@ -89,36 +83,65 @@ async function initMongoDB() {
 	collections.gmail = db.collection("gmail");
 }
 
-async function initTelegram() {
+async function initConnections() {
+	const users = await collections.users.find().toArray();
+	if (!users.length) {
+		console.log("Не зарегистрировано ни одного пользователя. Запусти getGoogleToken.js для аутентификации!");
+		process.exit(0);
+	}
+	let activeUsersAmount = 0;
+	for (let i = 0; i < users.length; i++) {
+		const user = users[i];
+		if (user.tokens) {
+			if (!usersConnections[user._id]) {
+				usersConnections[user._id] = {};
+			}
+			await ensureGoogleToken({ user });
+			await initTelegram({ _iduser:user._id });
+			if (force_token_refresh) {
+				await refreshGoogleToken({ user });
+			}
+			activeUsersAmount++;
+		} else {
+			console.log(`У пользователя ${user._id} нет токенов!`);
+		}
+	}
+	if (!activeUsersAmount) {
+		console.log("Нет ни одного активного пользователя. Запусти getGoogleToken.js для аутентификации!");
+		process.exit(0);
+	}
+}
+
+async function initTelegram({ _iduser }) {
 	if (config.telegram.apiKey) {
-		bot = new TelegramBot(config.telegram.apiKey, { polling:true });
-		bot.onText(/\/start/, async msg => {
+		usersConnections[_iduser].bot = new TelegramBot(config.telegram.apiKey, { polling:true });
+		usersConnections[_iduser].bot.onText(/\/start/, async msg => {
 			const chatId = msg.chat.id;
 			console.log("\n");
 			console.log(improveDate(new Date()), "Received /start.", "chat id:", chatId);
 			console.log("\n");
 			const user = await collections.users.findOne({ telegramId:chatId });
 			if (user) {
-				await bot.sendMessage(chatId, "Почта уже привязана");
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Почта уже привязана");
 			} else {
-				await bot.sendMessage(chatId, "Enter your email.");
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Enter your email.");
 			}
 		});
-		bot.onText(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, async msg => {
+		usersConnections[_iduser].bot.onText(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, async msg => {
 			const chatId = msg.chat.id;
 			console.log(improveDate(new Date()), "chat id:", chatId, msg.text);
 			const user = await collections.users.findOne({ email:msg.text });
 			if (user) {
 				const code = generateCode();
 				const text = `Код для привязки к телеграм: ${code}`;
-				await sendEmailToSelf({ subject:"Привязка к телеграм", text, auth:oauth2Client, toEmail:user.email });
-				await bot.sendMessage(chatId, "Проверь почту, туда должен прийти код, скинь его сюда.");
+				await sendEmailToSelf({ subject:"Привязка к телеграм", text, auth:usersConnections[user._id].oauth2Client, toEmail:user.email, _iduser:user._id });
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Проверь почту, туда должен прийти код, скинь его сюда.");
 				await collections.users.updateOne({ _id:user._id }, { $set:{ code_for_telegram:code } });
 			} else {
-				await bot.sendMessage(chatId, "Your email is unknown!");
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Your email is unknown!");
 			}
 		});
-		bot.onText(/^CMG-\d{8}$/, async msg => {
+		usersConnections[_iduser].bot.onText(/^CMG-\d{8}$/, async msg => {
 			const chatId = msg.chat.id;
 			console.log("\n");
 			console.log(improveDate(new Date()), "Received code:", msg.text, "chat id:", chatId);
@@ -126,9 +149,9 @@ async function initTelegram() {
 			const user = await collections.users.findOne({ code_for_telegram:msg.text });
 			if (user) {
 				await collections.users.updateOne({ _id:user._id }, { $set:{ telegramId:chatId }, $unset:{ code_for_telegram:"" } });
-				await bot.sendMessage(chatId, "Почта привязана.");
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Почта привязана.");
 			} else {
-				await bot.sendMessage(chatId, "Код неизвестен!");
+				await usersConnections[_iduser].bot.sendMessage(chatId, "Код неизвестен!");
 			}
 		});
 	} else {
@@ -137,21 +160,22 @@ async function initTelegram() {
 }
 
 async function refreshGoogleToken({ user }) {
-	const newTokens = await oauth2Client.refreshAccessToken();
-	oauth2Client.setCredentials(newTokens.credentials);
+	const newTokens = await usersConnections[user._id].oauth2Client.refreshAccessToken();
+	usersConnections[user._id].oauth2Client.setCredentials(newTokens.credentials);
 	await collections.users.updateOne({ _id:user._id }, { $set:{ tokens:newTokens.credentials } });
-	console.log(`Гугл-токен пользователя ${user._id} обновился.`);
+	console.log(`Гугл-токен пользователя ${user._id} (${user.email}) обновился.`);
 }
 
 async function ensureGoogleToken({ user }) {
-	oauth2Client.setCredentials(user.tokens);
+	usersConnections[user._id].oauth2Client = new google.auth.OAuth2(client_id, client_secret, "http://localhost");
+	usersConnections[user._id].oauth2Client.setCredentials(user.tokens);
 	if ((new Date()).valueOf() >= (user.tokens.expiry_date - 10*60*1000)) {
 		console.log(`Токен пользователя ${user._id} просроченный!`);
 		await refreshGoogleToken({ user });
 	} else {
 		console.log(`Токен пользователя ${user._id} действующий.`);
 	}
-	gmail = google.gmail({ version:'v1', auth:oauth2Client });
+	usersConnections[user._id].gmail = google.gmail({ version:'v1', auth:usersConnections[user._id].oauth2Client });
 }
 
 async function getMessages({ user }) {
@@ -159,7 +183,7 @@ async function getMessages({ user }) {
 	let allMessages = [];
 	let pageToken = null;
 	do {
-		const res = await gmail.users.messages.list({ userId, maxResults:10, pageToken });
+		const res = await usersConnections[user._id].gmail.users.messages.list({ userId, maxResults:10, pageToken });
 		if (res.data.messages) {
 			allMessages = allMessages.concat(res.data.messages);
 		}
@@ -173,7 +197,12 @@ async function getMessages({ user }) {
 }
 
 async function getMessage({ messageId, user }) {
-	const { data } = await gmail.users.messages.get({ userId:'me', id:messageId });
+	const { data } = await usersConnections[user._id].gmail.users.messages.get({ userId:'me', id:messageId });
+	const headers = data.payload.headers;
+	const subjectHeader = headers.find(h => h.name.toLowerCase() === 'subject');
+	const fromHeader = headers.find(h => h.name.toLowerCase() === 'from');
+	const subject = subjectHeader ? subjectHeader.value : '(no subject)';
+	const from = fromHeader ? fromHeader.value : '(no sender)';
 	let messageText;
 	if (data.payload.body && data.payload.body.data) {
 		messageText = decodeBase64Url(data.payload.body.data);
@@ -181,13 +210,14 @@ async function getMessage({ messageId, user }) {
 		messageText = findPlainTextPart(data.payload.parts);
 	}
 	const { id, threadId, snippet, historyId } = data;
-	const gmailData = { id, threadId, snippet, historyId, messageText, _iduser:user._id };
+	const gmailData = { id, threadId, snippet, historyId, messageText, _iduser:user._id, subject, from };
 	await collections.gmail.insertOne(gmailData);
 	console.log("\n");
 	console.log(id, data.snippet);
 	console.log("\n");
 	if (user.telegramId) {
-		await bot.sendMessage(user.telegramId, snippet);
+		const toTelegram = `${from}\n\n${subject}\n\n${snippet}`;
+		await usersConnections[user._id].bot.sendMessage(user.telegramId, toTelegram);
 	} else {
 		console.log(`У пользователя ${user._id} нет привязки к Телеграм!`);
 	}
@@ -220,7 +250,7 @@ async function getLastGmailMessage({ user }) {
 
 async function getMessagesAfter({ lastMessage }) {
 	const startHistoryId = lastMessage.historyId;
-	const { data: historyData } = await gmail.users.history.list({
+	const { data: historyData } = await usersConnections[lastMessage._iduser].gmail.users.history.list({
 		userId: 'me',
 		startHistoryId,
 		historyTypes: ['messageAdded'],
@@ -234,12 +264,12 @@ async function getMessagesAfter({ lastMessage }) {
 		}
 	}
 	console.log("\n");
-	console.log("Новые письма:", newMessageIds);
+	console.log(improveDate(new Date()), "Новые письма пользователя", lastMessage._iduser, newMessageIds);
 	console.log("\n");
 	return newMessageIds;
 }
 
-async function sendEmailToSelf({ toEmail, subject, text }) {
+async function sendEmailToSelf({ toEmail, subject, text, _iduser }) {
 	const mail = new MailComposer({
 		to: toEmail,
 		from: toEmail,
@@ -253,7 +283,7 @@ async function sendEmailToSelf({ toEmail, subject, text }) {
 			resolve(encoded);
 		});
 	});
-	await gmail.users.messages.send({
+	await usersConnections[_iduser].gmail.users.messages.send({
 		userId: 'me',
 		requestBody: {
 			raw: encodedMessage,
