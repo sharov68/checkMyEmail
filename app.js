@@ -197,29 +197,35 @@ async function getMessages({ user }) {
 }
 
 async function getMessage({ messageId, user }) {
-	const { data } = await usersConnections[user._id].gmail.users.messages.get({ userId:'me', id:messageId });
-	const headers = data.payload.headers;
-	const subjectHeader = headers.find(h => h.name.toLowerCase() === 'subject');
-	const fromHeader = headers.find(h => h.name.toLowerCase() === 'from');
-	const subject = subjectHeader ? subjectHeader.value : '(no subject)';
-	const from = fromHeader ? fromHeader.value : '(no sender)';
-	let messageText;
-	if (data.payload.body && data.payload.body.data) {
-		messageText = decodeBase64Url(data.payload.body.data);
-	} else if (data.payload.parts) {
-		messageText = findPlainTextPart(data.payload.parts);
-	}
-	const { id, threadId, snippet, historyId } = data;
-	const gmailData = { id, threadId, snippet, historyId, messageText, _iduser:user._id, subject, from };
-	await collections.gmail.insertOne(gmailData);
-	console.log("\n");
-	console.log(id, data.snippet);
-	console.log("\n");
-	if (user.telegramId) {
-		const toTelegram = `${from}\n\n${subject}\n\n${snippet}`;
-		await usersConnections[user._id].bot.sendMessage(user.telegramId, toTelegram);
-	} else {
-		console.log(`У пользователя ${user._id} нет привязки к Телеграм!`);
+	try {
+		const { data } = await usersConnections[user._id].gmail.users.messages.get({ userId:"me", id:messageId });
+		const headers = data.payload.headers;
+		const subjectHeader = headers.find(h => h.name.toLowerCase() === 'subject');
+		const fromHeader = headers.find(h => h.name.toLowerCase() === 'from');
+		const subject = subjectHeader ? subjectHeader.value : '(no subject)';
+		const from = fromHeader ? fromHeader.value : '(no sender)';
+		const returnPath = headers.find(h => h.name === 'Return-Path')?.value;
+		let messageText;
+		if (data.payload.body && data.payload.body.data) {
+			messageText = decodeBase64Url(data.payload.body.data);
+		} else if (data.payload.parts) {
+			messageText = findPlainTextPart(data.payload.parts);
+		}
+		const { id, threadId, snippet, historyId } = data;
+		const gmailData = { id, threadId, snippet, historyId, messageText, _iduser:user._id, subject, from, _dt:new Date(), returnPath };
+		await collections.gmail.insertOne(gmailData);
+		console.log("\n");
+		console.log(id, data.snippet);
+		console.log("\n");
+		if (user.telegramId) {
+			const toTelegram = `${from}\n${returnPath}\n\n${subject}\n\n${snippet}`;
+			await usersConnections[user._id].bot.sendMessage(user.telegramId, toTelegram);
+		} else {
+			console.log(`У пользователя ${user._id} нет привязки к Телеграм!`);
+		}
+	} catch (error) {
+		console.log(error);
+		console.log(`Скорее всего письмо ${messageId} либо в корзине, либо в спаме. Пропустим его.`);
 	}
 }
 
